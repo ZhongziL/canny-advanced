@@ -13,6 +13,7 @@ module canny_advanced(clk, reset);
 	reg	[`DATA_WIDTH-1:0]		readsPicture[0:`PICTURE_MIX-1];
 	reg	[`DATA_WIDTH-1:0]		readsPictureCache[0:`PICTURE_MIX-1];
 	reg	[`DATA_WIDTH-1:0]		gaussPicture[0:`PICTURE_MIX-1];
+	reg	[`DATA_WIDTH-1:0]		gaussPictureCache[0:`PICTURE_MIX-1];
 	reg	[`DATA_WIDTH-1:0]		sobelPicture[0:`PICTURE_MIX-1];
 	reg	[`DATA_WIDTH-1:0]		directPicture[0:`PICTURE_MIX-1];
 	reg	[`DATA_WIDTH-1:0]		nmsPicture[0:`PICTURE_MIX-1];
@@ -21,7 +22,8 @@ module canny_advanced(clk, reset);
 	
 	reg	[`DATA_WIDTH-1:0]		FILE_HEADER[0:`LEN_HEADER-1];
 	reg 		[31:0]					tpSum, Sum;
-	reg 	readcache;
+	reg signed	 	[31:0] 			Gx, Gy, fGx, fGy, Gxadd, Gyadd, Gxyadd;
+	reg 	readcache, gausscache;
 	
 	reg 	[`DATA_WIDTH-1:0]			gf[0:24];	// 5x5 Gaussian Filter
 	integer			sobelX[0:8];//	3x3 SobelX Filter
@@ -29,7 +31,7 @@ module canny_advanced(clk, reset);
 	
 	integer rx, ry, gx, gy, sx, sy, dx, dy, nx, ny, ndx, ndy, tx, ty, wx, wy;
 	integer i, j, k, count;
-	integer gi, gj;
+	integer gi, gj, si, sj;
 	
 	integer 				fileI, fileO, c, r;
 	
@@ -42,8 +44,9 @@ module canny_advanced(clk, reset);
 			dx = 202; dy = 202; nx = 202; ny = 202;
 			ndx = 202; ndy = 202; tx = 202; ty = 202;
 			wx = 0; wy = 0;
-			tpSum = 0; count = 0; readcache = 0;
-			gi = -2; gj = -2;
+			tpSum = 0; count = 0; readcache = 0; gausscache = 0;
+			Gxadd = 0; Gyadd = 0; Gxyadd = 0; Gx = 0; Gy = 0;
+ 			gi = -2; gj = -2; si = -1; sj = -1;
 			
 			gf[0] =1;  gf[1] =3;  gf[2]=4;   gf[3]=3;   gf[4]=1;
 			gf[5] =3;  gf[6] =7;  gf[7]=10;  gf[8]=7;   gf[9]=3;
@@ -76,7 +79,7 @@ module canny_advanced(clk, reset);
 				
 			r = $fread(FILE_HEADER, fileI, 0, `LEN_HEADER); 
 			
-			fileO = $fopen("1.OutputGauss.bmp","wb");
+			fileO = $fopen("2.OutputGradient.bmp","wb");
 			for(k=1; k<55; k=k+1)
 				begin
 					$fwrite(fileO, "%c", FILE_HEADER[k]);
@@ -151,6 +154,7 @@ module canny_advanced(clk, reset);
 								begin
 									gx = 201;
 									gy = 201;
+									gausscache = 1;
 								end
 						end
 				end
@@ -158,9 +162,79 @@ module canny_advanced(clk, reset);
 		
 	always@(posedge clk)
 		begin
-			if(reset && gx == 201 && gy == 201 && wx < 201 && wy < 201)
+			if(reset && gausscache)
 				begin
-					$fwrite(fileO, "%c%c%c", gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy]);
+					for (i = 0; i < `PICTURE_MIX; i=i+1)
+						begin
+							gaussPictureCache[i] = gaussPicture[i];
+							sobelPicture[i] = gaussPicture[i];
+						end
+					gausscache = 0;
+					sx = 1;
+					sy = 1;
+				end
+		end
+		
+	always@(posedge clk)
+		begin
+			if(reset && sx > 0 && sx < 199 && sy > 0 && sy < 199)
+				begin
+					Gxadd = gaussPictureCache[(sx+si)*`PICTURE_WIDTH+sy+sj]*sobelX[(1+si)*3+(1+sj)];
+					Gx = Gx + Gxadd;
+					Gyadd = gaussPictureCache[(sx+si)*`PICTURE_WIDTH+sy+sj]*sobelY[(1+si)*3+(1+sj)];
+					Gy = Gy + Gyadd;
+					si = si + 1;
+					if(si == 2)
+						begin
+							si = -1;
+							sj = sj + 1;
+						end
+					if(sj == 2)
+						begin
+							sj = -1;
+							if(Gx<0 && Gy<0)
+								begin
+									Gxyadd = (-Gx) + (-Gy);
+								end
+							else if(Gx>0 && Gy<0)
+								begin
+									Gxyadd = Gx + (-Gy);
+								end
+							else if(Gx<0 && Gy>0)
+								begin
+									Gxyadd = (-Gx) + Gy;
+								end
+							else 
+								begin
+									Gxyadd = Gx + Gy;
+								end
+								
+							if(Gxyadd < 0)	Gxyadd = -Gxyadd;
+										
+							sobelPicture[sx*`PICTURE_WIDTH+sy] = (Gxyadd>>3);
+							Gx = 0;
+							Gy = 0;
+							sx = sx + 1;
+						end
+					if(sx == 199)
+						begin
+							sx = 1;
+							sy = sy + 1;
+						end
+					if(sy == 199)
+						begin
+							sx = 201;
+							sy = 201;
+						end
+				end
+		end
+		
+	always@(posedge clk)
+		begin
+			if(reset && sx == 201 && sy == 201 && wx < 201 && wy < 201)
+				begin
+					$fwrite(fileO, "%c%c%c", sobelPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],sobelPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],sobelPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy]);
+					//$fwrite(fileO, "%c%c%c", gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],gaussPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy]);
 					//$fwrite(fileO, "%c%c%c", readsPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],readsPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy],readsPicture[(`PICTURE_LENGTH-wx-1)*`PICTURE_WIDTH+wy]);
 					wx = wx + 1;
 					if(wx == 200)
