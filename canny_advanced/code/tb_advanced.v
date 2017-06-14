@@ -46,7 +46,7 @@ module tb_advanced;
       reset = 1;
 		forever 
 			begin
-				#5;
+				#1;
 				clk = ~clk;
 			end
 		// Add stimulus here
